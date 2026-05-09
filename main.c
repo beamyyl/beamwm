@@ -506,6 +506,7 @@ void grab_input() {
         XGrabKey(dis, XKeysymToKeycode(dis, XF86XK_AudioMute),         0 | mods[i], root, True, GrabModeAsync, GrabModeAsync);
         XGrabKey(dis, XKeysymToKeycode(dis, XF86XK_MonBrightnessUp),   0 | mods[i], root, True, GrabModeAsync, GrabModeAsync);
         XGrabKey(dis, XKeysymToKeycode(dis, XF86XK_MonBrightnessDown), 0 | mods[i], root, True, GrabModeAsync, GrabModeAsync);
+        XGrabKey(dis, XKeysymToKeycode(dis, XK_Print), 0 | mods[i], root, True, GrabModeAsync, GrabModeAsync);
         for (int n = 0; n < 9; n++) {
             XGrabKey(dis, XKeysymToKeycode(dis, XK_1 + n), Mod4Mask | mods[i],             root, True, GrabModeAsync, GrabModeAsync);
             XGrabKey(dis, XKeysymToKeycode(dis, XK_1 + n), Mod4Mask | ShiftMask | mods[i], root, True, GrabModeAsync, GrabModeAsync);
@@ -601,6 +602,10 @@ int main() {
                     { char *c[] = {"pcmanfm", NULL}; spawn(c); }
                 if (ks == XK_e && super && shift)
                     { char *c[] = {"pkill", "X", NULL}; spawn(c); }
+
+                if (ks == XK_Print)
+                    { char *c[] = {"sh", "-c", "maim -s | xclip -selection clipboard -t image/png", NULL}; spawn(c); }
+
                 if (ks == XK_Print) 
                     { char *c[] = {"sh", "-c", "maim -s | xclip -selection clipboard -t image/png", NULL}; spawn(c); } 
                 if (ks == XK_t && super && !ctrl)   toggle_float();
