@@ -12,6 +12,7 @@
 #include <time.h>
 #include <sys/select.h>
 
+
 #define BAR_HEIGHT  26
 #define MAX_WS      9
 #define MAX_CLIENTS 64
@@ -339,6 +340,8 @@ void move_to_idx(int from, int to) {
     Window tmp_w = ws_wins[cur_ws][from];
     int    tmp_f = ws_float[cur_ws][from];
     int    tmp_F = ws_full[cur_ws][from];
+    int    tmp_x = ws_fx[cur_ws][from];
+    int    tmp_y = ws_fy[cur_ws][from];
     int dir = (to > from) ? 1 : -1;
     for (int i = from; i != to; i += dir) {
         ws_wins[cur_ws][i]  = ws_wins[cur_ws][i + dir];
