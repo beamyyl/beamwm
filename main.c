@@ -12,7 +12,6 @@
 #include <time.h>
 #include <sys/select.h>
 
-
 #define BAR_HEIGHT  26
 #define MAX_WS      9
 #define MAX_CLIENTS 64
