@@ -36,6 +36,8 @@ int    ws_count[MAX_WS];
 int    ws_sel[MAX_WS];
 int    ws_float[MAX_WS][MAX_CLIENTS];
 int    ws_full[MAX_WS][MAX_CLIENTS];
+int    ws_fx[MAX_WS][MAX_CLIENTS];
+int    ws_fy[MAX_WS][MAX_CLIENTS];
 
 static int    cached_bat = -1;
 static int    cached_vol = -1;
@@ -58,6 +60,8 @@ void ws_add(int ws, Window w) {
     ws_wins[ws][ws_count[ws]] = w;
     ws_float[ws][ws_count[ws]] = 0;
     ws_full[ws][ws_count[ws]]  = 0;
+    ws_fx[ws][ws_count[ws]]    = sw / 4;
+    ws_fy[ws][ws_count[ws]]    = sh / 4;
     ws_count[ws]++;
     ws_sel[ws] = ws_count[ws] - 1;
 }
@@ -69,6 +73,8 @@ void ws_remove(int ws, Window w) {
         ws_wins[ws][i]  = ws_wins[ws][i + 1];
         ws_float[ws][i] = ws_float[ws][i + 1];
         ws_full[ws][i]  = ws_full[ws][i + 1];
+        ws_fx[ws][i]    = ws_fx[ws][i + 1];
+        ws_fy[ws][i]    = ws_fy[ws][i + 1];
     }
     ws_count[ws]--;
     if (ws_count[ws] == 0)
@@ -259,6 +265,7 @@ void arrange() {
         Window w = ws_wins[cur_ws][i];
         XSetWindowBorderWidth(dis, w, BORDER);
         XSetWindowBorder(dis, w, w == sel ? COLOR_FLOAT : COLOR_UNFOCUS);
+        XMoveWindow(dis, w, ws_fx[cur_ws][i], ws_fy[cur_ws][i]);
         XRaiseWindow(dis, w);
     }
 
@@ -310,12 +317,18 @@ void move_step(int dir) {
     Window tmp_w = ws_wins[cur_ws][idx];
     int    tmp_f = ws_float[cur_ws][idx];
     int    tmp_F = ws_full[cur_ws][idx];
+    int    tmp_x = ws_fx[cur_ws][idx];
+    int    tmp_y = ws_fy[cur_ws][idx];
     ws_wins[cur_ws][idx]   = ws_wins[cur_ws][nidx];
     ws_float[cur_ws][idx]  = ws_float[cur_ws][nidx];
     ws_full[cur_ws][idx]   = ws_full[cur_ws][nidx];
+    ws_fx[cur_ws][idx]     = ws_fx[cur_ws][nidx];
+    ws_fy[cur_ws][idx]     = ws_fy[cur_ws][nidx];
     ws_wins[cur_ws][nidx]  = tmp_w;
     ws_float[cur_ws][nidx] = tmp_f;
     ws_full[cur_ws][nidx]  = tmp_F;
+    ws_fx[cur_ws][nidx]    = tmp_x;
+    ws_fy[cur_ws][nidx]    = tmp_y;
     ws_sel[cur_ws] = nidx;
     arrange();
 }
@@ -332,10 +345,14 @@ void move_to_idx(int from, int to) {
         ws_wins[cur_ws][i]  = ws_wins[cur_ws][i + dir];
         ws_float[cur_ws][i] = ws_float[cur_ws][i + dir];
         ws_full[cur_ws][i]  = ws_full[cur_ws][i + dir];
+        ws_fx[cur_ws][i]    = ws_fx[cur_ws][i + dir];
+        ws_fy[cur_ws][i]    = ws_fy[cur_ws][i + dir];
     }
     ws_wins[cur_ws][to]  = tmp_w;
     ws_float[cur_ws][to] = tmp_f;
     ws_full[cur_ws][to]  = tmp_F;
+    ws_fx[cur_ws][to]    = tmp_x;
+    ws_fy[cur_ws][to]    = tmp_y;
     ws_sel[cur_ws] = to;
 }
 
@@ -402,9 +419,11 @@ void movemouse(Window w) {
             if (ev.type == MotionNotify) {
                 if ((ev.xmotion.time - lasttime) <= (1000 / 60)) continue;
                 lasttime = ev.xmotion.time;
-                XMoveWindow(dis, w,
-                    ox + (ev.xmotion.x_root - startx),
-                    oy + (ev.xmotion.y_root - starty));
+                int nx = ox + (ev.xmotion.x_root - startx);
+                int ny = oy + (ev.xmotion.y_root - starty);
+                ws_fx[cur_ws][idx] = nx;
+                ws_fy[cur_ws][idx] = ny;
+                XMoveWindow(dis, w, nx, ny);
                 XSync(dis, False);
             }
         } while (ev.type != ButtonRelease);
