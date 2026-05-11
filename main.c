@@ -587,7 +587,7 @@ int main() {
     XMapRaised(dis, barwin);
     XDefineCursor(dis, root, XCreateFontCursor(dis, XC_left_ptr));
     grab_input();
-    XSelectInput(dis, root, SubstructureRedirectMask | SubstructureNotifyMask | ButtonPressMask);
+    XSelectInput(dis, root, SubstructureRedirectMask | SubstructureNotifyMask | StructureNotifyMask | ButtonPressMask);
 
     cached_vol = get_volume();  last_vol  = time(NULL);
     cached_bat = get_battery(); last_bat  = time(NULL);
@@ -606,6 +606,15 @@ int main() {
 
         while (XPending(dis)) {
             XNextEvent(dis, &ev);
+
+            if (ev.type == ConfigureNotify) {
+                if (ev.xconfigure.window == root) {
+                    sw = ev.xconfigure.width;
+                    sh = ev.xconfigure.height;
+                    XMoveResizeWindow(dis, barwin, 0, 0, sw, BAR_HEIGHT);
+                    arrange();
+                }
+            }
 
             if (ev.type == KeyPress) {
                 KeySym ks = XLookupKeysym(&ev.xkey, 0);
