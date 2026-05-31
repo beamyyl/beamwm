@@ -63,7 +63,7 @@ services.displayManager.sessionPackages = [ (pkgs.callPackage /home/USER/beamwm/
 ```
 **! Replace 'USER' with your username and change the path to yours !**
 
-Then build by running:
+3. Build by running:
 ```bash
 sudo nixos-rebuild switch
 ```
