@@ -71,4 +71,5 @@ sudo nixos-rebuild switch
 After this, you can run beamwm via any Display Manager or via xinit
 Here's an example .xinitrc file:
 ```bash
-exec beamwm;```
+exec beamwm;
+```
