@@ -1,5 +1,5 @@
 # beamwm
-A lightweight, minimalist tiling window manager for X11 written in C. Everything is customized from main.c (which is under 700 lines!)
+A lightweight, minimalist tiling window manager for X11 written in C. Everything is customized from `main.c` (which is under 700 lines!)
 
 ![image](images/example.png)
 
@@ -45,7 +45,7 @@ libx11 libxft libxinerama libxrandr xorgproto
 ### Building
 
 1. Clone the repository.
-2. Compile it via make:
+2. Compile it via `make`:
 
 ```bash
 sudo make clean install
@@ -53,7 +53,7 @@ sudo make clean install
 ## NixOS installation
 
 1. Clone this repository
-2. Add the following in /etc/nixos/configuration.nix:
+2. Add the following in `/etc/nixos/configuration.nix`:
 ```bash
 environment.systemPackages = with pkgs; [
   (pkgs.callPackage /home/USER/beamwm/beamwm.nix {})
@@ -63,7 +63,7 @@ and
 ```bash
 services.displayManager.sessionPackages = [ (pkgs.callPackage /home/USER/beamwm/beamwm.nix {}) ];
 ```
-  **! Replace 'USER' with your username and change the path to yours !**
+  **! Replace `USER` with your username and change the path to yours !**
 
 3. Build by running:
 ```bash
