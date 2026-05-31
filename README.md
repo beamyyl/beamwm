@@ -36,11 +36,10 @@ A lightweight, minimalist tiling window manager for X11 written in C. Everything
 
 ### Dependencies
 
-
 ```bash
 libx11 libxft libxinerama libxrandr xorgproto
 ```
-(dwm's deps)
+(aka dwm's deps)
 
 ### Building
 
@@ -50,6 +49,26 @@ libx11 libxft libxinerama libxrandr xorgproto
 ```bash
 sudo make clean install
 ```
+## NixOS installation
+
+1. Clone this repository
+2. Add the following in /etc/nixos/configuration.nix:
+```bash
+environment.systemPackages = with pkgs; [
+  (pkgs.callPackage /home/USER/beamwm/beamwm.nix {})
+];
+```
+and
+```bash
+services.displayManager.sessionPackages = [ (pkgs.callPackage /home/USER/beamwm/beamwm.nix {}) ];
+```
+! Replace 'USER' with your username and change the path to yours !
+
+Then build by:
+```bash
+sudo nixos-rebuild switch
+```
+
 After this, you can run beamwm via any Display Manager or via xinit
 Here's an example .xinitrc file:
 ```bash
