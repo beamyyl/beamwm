@@ -70,7 +70,7 @@ services.displayManager.sessionPackages = [ (pkgs.callPackage /home/USER/beamwm/
 sudo nixos-rebuild switch
 ```
 
-After this, you can run beamwm via any Display Manager or via xinit
+After this, you can run beamwm via any Display Manager or via xinit.
 Here's an example .xinitrc file:
 ```bash
 exec beamwm
