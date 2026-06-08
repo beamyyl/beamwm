@@ -1,6 +1,7 @@
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/Xproto.h>
+#include <X11/Xatom.h>
 #include <X11/keysym.h>
 #include <X11/XF86keysym.h>
 #include <X11/cursorfont.h>
@@ -23,8 +24,13 @@
 #define COLOR_FLOAT   0xbb9af7
 #define MOUSEMASK (ButtonPressMask|ButtonReleaseMask|PointerMotionMask)
 
+#define TRAY_MAX 32
+#define SYSTEM_TRAY_REQUEST_DOCK 0
+#define XEMBED_EMBEDDED_NOTIFY 0
+#define XEMBED_VERSION 0
+
 Display *dis;
-Window root, barwin;
+Window root, barwin, traywin;
 int sw, sh, cur_ws = 0;
 float mfact = 0.55;
 XftFont *font;
@@ -44,6 +50,49 @@ static char   cached_time[64] = "";
 static time_t last_bat  = 0;
 static time_t last_vol  = 0;
 static time_t last_time = 0;
+
+int ws_click_x[MAX_WS];
+int ws_click_w[MAX_WS];
+
+Window tray_clients[TRAY_MAX];
+int tray_count = 0;
+int tray_w = 1;
+static int tray_x = 0;
+
+/* atoms */
+Atom a_net_wm_window_type;
+Atom a_net_wm_window_type_dialog;
+Atom a_net_wm_window_type_utility;
+Atom a_net_wm_window_type_splash;
+Atom a_net_wm_window_type_menu;
+Atom a_net_wm_window_type_toolbar;
+Atom a_net_wm_window_type_notification;
+Atom a_net_wm_window_type_dropdown_menu;
+Atom a_net_wm_window_type_popup_menu;
+Atom a_net_wm_window_type_combo;
+Atom a_net_wm_window_type_dnd;
+Atom a_net_wm_window_type_dock;
+Atom a_net_wm_window_type_desktop;
+Atom a_net_wm_window_type_tooltip;
+Atom a_net_wm_state;
+Atom a_net_wm_state_modal;
+
+Atom a_net_system_tray_s0;
+Atom a_net_system_tray_opcode;
+Atom a_xembed;
+Atom a_xembed_info;
+Atom a_manager;
+
+/* some declarations */
+void arrange(void);
+void tray_arrange(void);
+void view(int ws);
+void handle_bar_click(XButtonEvent *e);
+int should_float(Window w);
+void tray_claim(void);
+void tray_dock(Window client);
+void tray_remove(Window w);
+static int txtw(const char *s);
 
 /* ── helpers ───────────────────────────────────────────────── */
 
@@ -134,7 +183,170 @@ int get_volume() {
     return vol;
 }
 
+/* ── floating rules ────────────────────────────────────────── */
+
+int atom_has(Atom a, Atom *list, unsigned long n) {
+    for (unsigned long i = 0; i < n; i++)
+        if (list[i] == a) return 1;
+    return 0;
+}
+
+int should_float(Window w) {
+    XWindowAttributes wa;
+    if (!XGetWindowAttributes(dis, w, &wa)) return 0;
+
+    if (wa.override_redirect) return 1;
+
+    Window trans;
+    if (XGetTransientForHint(dis, w, &trans))
+        return 1;
+
+    Atom actual;
+    int format;
+    unsigned long nitems, after;
+    Atom *atoms = NULL;
+
+    if (XGetWindowProperty(dis, w, a_net_wm_state, 0, 16, False, XA_ATOM,
+        &actual, &format, &nitems, &after, (unsigned char **)&atoms) == Success && atoms) {
+        int floating = atom_has(a_net_wm_state_modal, atoms, nitems);
+        XFree(atoms);
+        if (floating) return 1;
+    }
+
+    if (XGetWindowProperty(dis, w, a_net_wm_window_type, 0, 32, False, XA_ATOM,
+        &actual, &format, &nitems, &after, (unsigned char **)&atoms) == Success && atoms) {
+
+        int floating =
+            atom_has(a_net_wm_window_type_dialog, atoms, nitems) ||
+            atom_has(a_net_wm_window_type_utility, atoms, nitems) ||
+            atom_has(a_net_wm_window_type_splash, atoms, nitems) ||
+            atom_has(a_net_wm_window_type_menu, atoms, nitems) ||
+            atom_has(a_net_wm_window_type_toolbar, atoms, nitems) ||
+            atom_has(a_net_wm_window_type_notification, atoms, nitems) ||
+            atom_has(a_net_wm_window_type_dropdown_menu, atoms, nitems) ||
+            atom_has(a_net_wm_window_type_popup_menu, atoms, nitems) ||
+            atom_has(a_net_wm_window_type_combo, atoms, nitems) ||
+            atom_has(a_net_wm_window_type_dnd, atoms, nitems) ||
+            atom_has(a_net_wm_window_type_dock, atoms, nitems) ||
+            atom_has(a_net_wm_window_type_desktop, atoms, nitems) ||
+            atom_has(a_net_wm_window_type_tooltip, atoms, nitems);
+
+        XFree(atoms);
+        return floating;
+    }
+
+    return 0;
+}
+
+/* ── tray helpers ──────────────────────────────────────────── */
+
+int tray_find(Window w) {
+    for (int i = 0; i < tray_count; i++)
+        if (tray_clients[i] == w) return i;
+    return -1;
+}
+
+void tray_arrange() {
+    if (!traywin) return;
+
+    int x = 4;
+    int h = BAR_HEIGHT - 6;
+
+    for (int i = 0; i < tray_count; i++) {
+        XWindowAttributes wa;
+        if (!XGetWindowAttributes(dis, tray_clients[i], &wa))
+            continue;
+
+        int w = wa.width;
+        if (w < h) w = h;
+        if (wa.height < h) {
+            XResizeWindow(dis, tray_clients[i], w, h);
+        }
+
+        XMoveResizeWindow(dis, tray_clients[i], x, 1, w, h);
+        x += w + 6;
+    }
+
+    tray_w = (tray_count > 0) ? (x + 4) : 1;
+
+    int tx = tray_x;
+    if (tx < 120) tx = 120;
+
+    XMoveResizeWindow(dis, traywin, tx, 3, tray_w, h);
+}
+
+void tray_claim() {
+    XSetSelectionOwner(dis, a_net_system_tray_s0, traywin, CurrentTime);
+    if (XGetSelectionOwner(dis, a_net_system_tray_s0) != traywin)
+        return;
+
+    XClientMessageEvent ev = {0};
+    ev.type = ClientMessage;
+    ev.window = root;
+    ev.message_type = a_manager;
+    ev.format = 32;
+    ev.data.l[0] = CurrentTime;
+    ev.data.l[1] = a_net_system_tray_s0;
+    ev.data.l[2] = traywin;
+    ev.data.l[3] = 0;
+    ev.data.l[4] = 0;
+
+    XSendEvent(dis, root, False, StructureNotifyMask, (XEvent *)&ev);
+    XSync(dis, False);
+}
+
+void tray_dock(Window client) {
+    if (tray_find(client) >= 0) return;
+    if (tray_count >= TRAY_MAX) return;
+
+    tray_clients[tray_count++] = client;
+
+    XAddToSaveSet(dis, client);
+    XSelectInput(dis, client, StructureNotifyMask | PropertyChangeMask);
+
+    unsigned long xembed_info[2] = { XEMBED_VERSION, 1 };
+    XChangeProperty(dis, client, a_xembed_info, XA_CARDINAL, 32, PropModeReplace,
+        (unsigned char *)xembed_info, 2);
+
+    XReparentWindow(dis, client, traywin, 0, 0);
+
+    XClientMessageEvent ev = {0};
+    ev.type = ClientMessage;
+    ev.window = client;
+    ev.message_type = a_xembed;
+    ev.format = 32;
+    ev.data.l[0] = CurrentTime;
+    ev.data.l[1] = XEMBED_EMBEDDED_NOTIFY;
+    ev.data.l[2] = 0;
+    ev.data.l[3] = traywin;
+    ev.data.l[4] = 0;
+
+    XSendEvent(dis, client, False, NoEventMask, (XEvent *)&ev);
+    XMapRaised(dis, client);
+    tray_arrange();
+    XSync(dis, False);
+}
+
+void tray_remove(Window w) {
+    int idx = tray_find(w);
+    if (idx < 0) return;
+
+    XRemoveFromSaveSet(dis, w);
+
+    for (int i = idx; i < tray_count - 1; i++)
+        tray_clients[i] = tray_clients[i + 1];
+    tray_count--;
+
+    tray_arrange();
+}
+
 /* ── bar ───────────────────────────────────────────────────── */
+
+static int txtw(const char *s) {
+    XGlyphInfo ext;
+    XftTextExtentsUtf8(dis, font, (FcChar8 *)s, strlen(s), &ext);
+    return ext.xOff;
+}
 
 void draw_bar() {
     time_t now = time(NULL);
@@ -158,18 +370,21 @@ void draw_bar() {
         char label[4];
         snprintf(label, sizeof(label), "%d", i + 1);
         XftColor *col = (i == cur_ws || ws_count[i] > 0) ? &xft_white : &xft_gray;
-        XGlyphInfo ext;
-        XftTextExtentsUtf8(dis, font, (FcChar8*)label, strlen(label), &ext);
-        XftDrawStringUtf8(d, col, font, x, 18, (FcChar8*)label, strlen(label));
-        x += ext.xOff + 10;
+
+        int w = txtw(label);
+        ws_click_x[i] = x;
+        ws_click_w[i] = w;
+
+        XftDrawStringUtf8(d, col, font, x, 18, (FcChar8 *)label, strlen(label));
+        x += w + 14;
     }
 
-    /* right: bat | vol | time */
+    /* right: tray | battery | volume | time */
     char stat_msg[192] = "";
     char tmp[64];
     int first = 1;
     if (cached_bat != -1) {
-        snprintf(tmp, sizeof(tmp), "󰁹 %d%%", cached_bat);
+        snprintf(tmp, sizeof(tmp), "| 󰁹 %d%%", cached_bat);
         strncat(stat_msg, tmp, sizeof(stat_msg) - strlen(stat_msg) - 1);
         first = 0;
     }
@@ -186,9 +401,21 @@ void draw_bar() {
 
     XGlyphInfo ext;
     XftTextExtentsUtf8(dis, font, (FcChar8*)stat_msg, strlen(stat_msg), &ext);
+
+    tray_x = sw - ext.xOff - tray_w - 28;
+    if (tray_x < 120) tray_x = 120;
+
+    if (tray_count > 0) {
+        XftDrawStringUtf8(d, &xft_gray, font,
+                          tray_x + tray_w + 8, 18,
+                          (FcChar8 *)" | ", 1);
+    }
+
     XftDrawStringUtf8(d, &xft_white, font, sw - ext.xOff - 12, 18,
                       (FcChar8*)stat_msg, strlen(stat_msg));
     XftDrawDestroy(d);
+
+    tray_arrange();
 }
 
 /* ── arrange ───────────────────────────────────────────────── */
@@ -279,7 +506,7 @@ void arrange() {
 /* ── focus / remove ────────────────────────────────────────── */
 
 void focus_window(Window w) {
-    if (!w || w == barwin || w == root) return;
+    if (!w || w == barwin || w == root || w == traywin) return;
     int idx = ws_find(cur_ws, w);
     if (idx < 0) return;
     ws_sel[cur_ws] = idx;
@@ -400,6 +627,33 @@ void view(int ws) {
     arrange();
 }
 
+/* ── bar click handling ───────────────────────────────────── */
+
+void handle_bar_click(XButtonEvent *e) {
+    for (int i = 0; i < MAX_WS; i++) {
+        if (e->x >= ws_click_x[i] && e->x <= ws_click_x[i] + ws_click_w[i]) {
+            if (e->button == Button1) {
+                view(i);
+            } else if (e->button == Button3) {
+                Window sel = cur_sel();
+                if (sel) {
+                    int fi = ws_float[cur_ws][ws_sel[cur_ws]];
+                    int fu = ws_full[cur_ws][ws_sel[cur_ws]];
+                    ws_remove(cur_ws, sel);
+                    ws_add(i, sel);
+                    int ni = ws_find(i, sel);
+                    if (ni >= 0) {
+                        ws_float[i][ni] = fi;
+                        ws_full[i][ni]  = fu;
+                    }
+                }
+                arrange();
+            }
+            return;
+        }
+    }
+}
+
 /* ── mouse move / resize ───────────────────────────────────── */
 
 void movemouse(Window w) {
@@ -499,7 +753,29 @@ void resizemouse(Window w) {
     }
 }
 
-/* ── input grabbing ────────────────────────────────────────── */
+/* ── input grabbing ──────────────────────────────────────────/
+also the default keybinds (+ others a bit more down): */
+/* ── keybinds ──────────────────────────────────────────────────
+   ctrl+alt+t            alacritty
+   super+r               rofi
+   super+e               pcmanfm
+   super+shift+e         kill X session
+   super+t               toggle float
+   super+f               toggle fullscreen
+   alt+f4                close focused window
+   alt+tab               cycle focus
+   super+left/right      focus prev/next window
+   super+up/down         focus prev/next window
+   super+shift+arrows    move window in layout order
+   super+lmb             drag tiled to reorder / drag float freely
+   super+rmb             resize float / adjust mfact (tiled)
+   super+1..9            switch workspace
+   super+shift+1..9      move window to workspace
+   XF86 vol up/down      volume +5/-5 (wpctl)
+   XF86 mute             toggle mute (wpctl)
+   XF86 bright up/down   brightness +5/-5 (brightnessctl)
+   Print                 take a screenshot (xclip + maim)
+   ─────────────────────────────────────────────────────────── */
 
 void grab_input() {
     XUngrabKey(dis, AnyKey, AnyModifier, root);
@@ -538,27 +814,6 @@ void grab_input() {
 
 /* ── main ──────────────────────────────────────────────────── */
 
-/* ── keybinds ──────────────────────────────────────────────────
-   ctrl+alt+t            alacritty
-   super+r               rofi
-   super+e               pcmanfm
-   super+shift+e         kill X session
-   super+t               toggle float
-   super+f               toggle fullscreen
-   alt+f4                close focused window
-   alt+tab               cycle focus
-   super+left/right      focus prev/next window
-   super+up/down         focus prev/next window
-   super+shift+arrows    move window in layout order
-   super+lmb             drag tiled to reorder / drag float freely
-   super+rmb             resize float / adjust mfact (tiled)
-   super+1..9            switch workspace
-   super+shift+1..9      move window to workspace
-   XF86 vol up/down      volume +5/-5 (wpctl)
-   XF86 mute             toggle mute (wpctl)
-   XF86 bright up/down   brightness +5/-5 (brightnessctl)
-   Print                 take a screenshot (xclip + maim)
-   ─────────────────────────────────────────────────────────── */
 
 int main() {
     if (!(dis = XOpenDisplay(NULL))) return 1;
@@ -568,6 +823,29 @@ int main() {
     sw = DisplayWidth(dis, 0);
     sh = DisplayHeight(dis, 0);
     for (int i = 0; i < MAX_WS; i++) { ws_count[i] = 0; ws_sel[i] = -1; }
+
+    a_net_wm_window_type           = XInternAtom(dis, "_NET_WM_WINDOW_TYPE", False);
+    a_net_wm_window_type_dialog    = XInternAtom(dis, "_NET_WM_WINDOW_TYPE_DIALOG", False);
+    a_net_wm_window_type_utility   = XInternAtom(dis, "_NET_WM_WINDOW_TYPE_UTILITY", False);
+    a_net_wm_window_type_splash    = XInternAtom(dis, "_NET_WM_WINDOW_TYPE_SPLASH", False);
+    a_net_wm_window_type_menu      = XInternAtom(dis, "_NET_WM_WINDOW_TYPE_MENU", False);
+    a_net_wm_window_type_toolbar   = XInternAtom(dis, "_NET_WM_WINDOW_TYPE_TOOLBAR", False);
+    a_net_wm_window_type_notification = XInternAtom(dis, "_NET_WM_WINDOW_TYPE_NOTIFICATION", False);
+    a_net_wm_window_type_dropdown_menu = XInternAtom(dis, "_NET_WM_WINDOW_TYPE_DROPDOWN_MENU", False);
+    a_net_wm_window_type_popup_menu    = XInternAtom(dis, "_NET_WM_WINDOW_TYPE_POPUP_MENU", False);
+    a_net_wm_window_type_combo     = XInternAtom(dis, "_NET_WM_WINDOW_TYPE_COMBO", False);
+    a_net_wm_window_type_dnd       = XInternAtom(dis, "_NET_WM_WINDOW_TYPE_DND", False);
+    a_net_wm_window_type_dock      = XInternAtom(dis, "_NET_WM_WINDOW_TYPE_DOCK", False);
+    a_net_wm_window_type_desktop   = XInternAtom(dis, "_NET_WM_WINDOW_TYPE_DESKTOP", False);
+    a_net_wm_window_type_tooltip   = XInternAtom(dis, "_NET_WM_WINDOW_TYPE_TOOLTIP", False);
+    a_net_wm_state                 = XInternAtom(dis, "_NET_WM_STATE", False);
+    a_net_wm_state_modal           = XInternAtom(dis, "_NET_WM_STATE_MODAL", False);
+
+    a_net_system_tray_s0 = XInternAtom(dis, "_NET_SYSTEM_TRAY_S0", False);
+    a_net_system_tray_opcode = XInternAtom(dis, "_NET_SYSTEM_TRAY_OPCODE", False);
+    a_xembed = XInternAtom(dis, "_XEMBED", False);
+    a_xembed_info = XInternAtom(dis, "_XEMBED_INFO", False);
+    a_manager = XInternAtom(dis, "MANAGER", False);
 
     Atom net_wm_name = XInternAtom(dis, "_NET_WM_NAME", False);
     Atom utf8_string = XInternAtom(dis, "UTF8_STRING", False);
@@ -585,6 +863,12 @@ int main() {
         CopyFromParent, CopyFromParent, CopyFromParent,
         CWOverrideRedirect | CWBackPixel, &wa);
     XMapRaised(dis, barwin);
+    XSelectInput(dis, barwin, ExposureMask | ButtonPressMask);
+
+    traywin = XCreateSimpleWindow(dis, barwin, 0, 3, 1, BAR_HEIGHT - 6, 0, 0, COLOR_BG);
+    XMapRaised(dis, traywin);
+    tray_claim();
+
     XDefineCursor(dis, root, XCreateFontCursor(dis, XC_left_ptr));
     grab_input();
     XSelectInput(dis, root, SubstructureRedirectMask | SubstructureNotifyMask | StructureNotifyMask | ButtonPressMask);
@@ -616,6 +900,20 @@ int main() {
                 }
             }
 
+            if (ev.type == ClientMessage) {
+                if ((Atom)ev.xclient.message_type == a_net_system_tray_opcode &&
+                    ev.xclient.data.l[1] == SYSTEM_TRAY_REQUEST_DOCK) {
+                    Window client = (Window)ev.xclient.data.l[2];
+                    tray_dock(client);
+                    arrange();
+                }
+            }
+
+            if (ev.type == ButtonPress && ev.xbutton.window == barwin) {
+                handle_bar_click(&ev.xbutton);
+                continue;
+            }
+
             if (ev.type == KeyPress) {
                 KeySym ks = XLookupKeysym(&ev.xkey, 0);
                 int super = ev.xkey.state & Mod4Mask;
@@ -635,8 +933,6 @@ int main() {
                 if (ks == XK_Print)
                     { char *c[] = {"sh", "-c", "maim -s | xclip -selection clipboard -t image/png", NULL}; spawn(c); }
 
-                if (ks == XK_Print) 
-                    { char *c[] = {"sh", "-c", "maim -s | xclip -selection clipboard -t image/png", NULL}; spawn(c); } 
                 if (ks == XK_t && super && !ctrl)   toggle_float();
                 if (ks == XK_f && super)             toggle_fullscreen();
                 if (ks == XK_F4 && alt)
@@ -666,8 +962,10 @@ int main() {
                             ws_remove(cur_ws, sel);
                             ws_add(t, sel);
                             int ni = ws_find(t, sel);
-                            ws_float[t][ni] = fi;
-                            ws_full[t][ni]  = fu;
+                            if (ni >= 0) {
+                                ws_float[t][ni] = fi;
+                                ws_full[t][ni]  = fu;
+                            }
                             arrange();
                         }
                     } else view(t);
@@ -676,7 +974,7 @@ int main() {
 
             if (ev.type == ButtonPress && (ev.xbutton.state & Mod4Mask)) {
                 Window clicked = ev.xbutton.subwindow ? ev.xbutton.subwindow : ev.xbutton.window;
-                if (clicked && clicked != root && clicked != barwin) {
+                if (clicked && clicked != root && clicked != barwin && clicked != traywin) {
                     focus_window(clicked);
                     if (ev.xbutton.button == Button1)
                         movemouse(clicked);
@@ -687,15 +985,26 @@ int main() {
 
             if (ev.type == MapRequest) {
                 Window w = ev.xmaprequest.window;
-                XSelectInput(dis, w, EnterWindowMask | FocusChangeMask);
-                XMapWindow(dis, w);
+                XSelectInput(dis, w, EnterWindowMask | FocusChangeMask | PropertyChangeMask);
                 ws_add(cur_ws, w);
+                int idx = ws_find(cur_ws, w);
+                if (idx >= 0 && should_float(w))
+                    ws_float[cur_ws][idx] = 1;
+                XMapWindow(dis, w);
                 arrange();
             }
 
             if (ev.type == EnterNotify)   focus_window(ev.xcrossing.window);
-            if (ev.type == UnmapNotify)   remove_window(ev.xunmap.window);
-            if (ev.type == DestroyNotify) remove_window(ev.xdestroywindow.window);
+
+            if (ev.type == UnmapNotify) {
+                tray_remove(ev.xunmap.window);
+                remove_window(ev.xunmap.window);
+            }
+
+            if (ev.type == DestroyNotify) {
+                tray_remove(ev.xdestroywindow.window);
+                remove_window(ev.xdestroywindow.window);
+            }
         }
     }
     return 0;
