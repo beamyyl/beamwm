@@ -63,7 +63,7 @@ and
 ```bash
 services.displayManager.sessionPackages = [ (pkgs.callPackage /home/USER/beamwm/beamwm.nix {}) ];
 ```
-   **! Replace `USER` with your username and change the path to yours !**
+‎   **! Replace `USER` with your username and change the path to yours !**
 
 3. Build by running:
 ```bash
