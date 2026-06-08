@@ -12,7 +12,7 @@ A lightweight, minimalist tiling window manager for X11 written in C. Everything
 - **Integrated Bar:** Displays workspaces (now clickable), battery percentage, system volume, date/time and a systray.
 - **Mouse Support:** Move and resize floating windows, reorder tiled windows with drag-and-drop or resize tiled windows.
 
-## Keybindings
+## Default keybinds
 
 | Keybinding | Action |
 | :--- | :--- |
