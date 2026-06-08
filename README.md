@@ -9,10 +9,8 @@ A lightweight, minimalist tiling window manager for X11 written in C. Everything
 - **Dynamic Tiling:** Automatic Master-Stack layout with adjustable master factor.
 - **Floating Mode:** Toggle windows between tiled and floating modes.
 - **Fullscreen:** Focused window can be toggled to occupy the entire screen.
-- **Integrated Bar:** Displays workspaces, battery percentage, system volume, and date/time.
-- **Multi-Workspace:** 9 Workspaces.
+- **Integrated Bar:** Displays workspaces (now clickable), battery percentage, system volume, date/time and a systray.
 - **Mouse Support:** Move and resize floating windows, reorder tiled windows with drag-and-drop or resize tiled windows.
-- **Gap & Border Support:** Customizable inner/outer gaps.
 
 ## Keybindings
 
