@@ -1,5 +1,5 @@
 # beamwm
-A lightweight, minimalist tiling window manager for X11 written in C. Everything is customized from `main.c` (which is under 700 lines!)
+A lightweight, minimalist tiling window manager for X11 written in C. Everything is customized from `main.c` (which is under 1500 lines of code!)
 
 ![image](images/example.png)
 
