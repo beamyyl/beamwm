@@ -13,26 +13,39 @@
 #include <time.h>
 #include <sys/select.h>
 
-#define BAR_HEIGHT  26
-#define MAX_WS      9
-#define MAX_CLIENTS 64
-#define GAP         12
-#define BORDER      2
-#define COLOR_BG      0x1a1b26
-#define COLOR_FOCUS   0x7aa2f7
-#define COLOR_UNFOCUS 0x414868
-#define COLOR_FLOAT   0xbb9af7
-#define MOUSEMASK (ButtonPressMask|ButtonReleaseMask|PointerMotionMask)
-
-#define TRAY_MAX 32
+#define MOUSEMASK                (ButtonPressMask|ButtonReleaseMask|PointerMotionMask)
 #define SYSTEM_TRAY_REQUEST_DOCK 0
-#define XEMBED_EMBEDDED_NOTIFY 0
-#define XEMBED_VERSION 0
+#define XEMBED_EMBEDDED_NOTIFY   0
+#define XEMBED_VERSION           0
+
+typedef enum {
+    ACT_SPAWN,
+    ACT_VOL_SPAWN,
+    ACT_TOGGLE_FLOAT,
+    ACT_TOGGLE_FULL,
+    ACT_KILL,
+    ACT_CYCLE_FOCUS,
+    ACT_FOCUS_PREV,
+    ACT_FOCUS_NEXT,
+    ACT_MOVE_PREV,
+    ACT_MOVE_NEXT,
+} Action;
+
+typedef struct {
+    unsigned int  mod;
+    KeySym        key;
+    Action        action;
+    char        **cmd;
+} Keybind;
+
+#include "config.h"
+
+/* ── globals ───────────────────────────────────────────────── */
 
 Display *dis;
 Window root, barwin, traywin;
 int sw, sh, cur_ws = 0;
-float mfact = 0.55;
+float mfact = MFACT_INIT;
 XftFont *font;
 XftColor xft_white, xft_gray;
 
@@ -59,7 +72,8 @@ int tray_count = 0;
 int tray_w = 1;
 static int tray_x = 0;
 
-/* atoms */
+/* ── atoms ─────────────────────────────────────────────────── */
+
 Atom a_net_wm_window_type;
 Atom a_net_wm_window_type_dialog;
 Atom a_net_wm_window_type_utility;
@@ -76,19 +90,19 @@ Atom a_net_wm_window_type_desktop;
 Atom a_net_wm_window_type_tooltip;
 Atom a_net_wm_state;
 Atom a_net_wm_state_modal;
-
 Atom a_net_system_tray_s0;
 Atom a_net_system_tray_opcode;
 Atom a_xembed;
 Atom a_xembed_info;
 Atom a_manager;
 
-/* some declarations */
+/* ── forward declarations ──────────────────────────────────── */
+
 void arrange(void);
 void tray_arrange(void);
 void view(int ws);
 void handle_bar_click(XButtonEvent *e);
-int should_float(Window w);
+int  should_float(Window w);
 void tray_claim(void);
 void tray_dock(Window client);
 void tray_remove(Window w);
@@ -194,12 +208,10 @@ int atom_has(Atom a, Atom *list, unsigned long n) {
 int should_float(Window w) {
     XWindowAttributes wa;
     if (!XGetWindowAttributes(dis, w, &wa)) return 0;
-
     if (wa.override_redirect) return 1;
 
     Window trans;
-    if (XGetTransientForHint(dis, w, &trans))
-        return 1;
+    if (XGetTransientForHint(dis, w, &trans)) return 1;
 
     Atom actual;
     int format;
@@ -215,26 +227,23 @@ int should_float(Window w) {
 
     if (XGetWindowProperty(dis, w, a_net_wm_window_type, 0, 32, False, XA_ATOM,
         &actual, &format, &nitems, &after, (unsigned char **)&atoms) == Success && atoms) {
-
         int floating =
-            atom_has(a_net_wm_window_type_dialog, atoms, nitems) ||
-            atom_has(a_net_wm_window_type_utility, atoms, nitems) ||
-            atom_has(a_net_wm_window_type_splash, atoms, nitems) ||
-            atom_has(a_net_wm_window_type_menu, atoms, nitems) ||
-            atom_has(a_net_wm_window_type_toolbar, atoms, nitems) ||
-            atom_has(a_net_wm_window_type_notification, atoms, nitems) ||
+            atom_has(a_net_wm_window_type_dialog,        atoms, nitems) ||
+            atom_has(a_net_wm_window_type_utility,       atoms, nitems) ||
+            atom_has(a_net_wm_window_type_splash,        atoms, nitems) ||
+            atom_has(a_net_wm_window_type_menu,          atoms, nitems) ||
+            atom_has(a_net_wm_window_type_toolbar,       atoms, nitems) ||
+            atom_has(a_net_wm_window_type_notification,  atoms, nitems) ||
             atom_has(a_net_wm_window_type_dropdown_menu, atoms, nitems) ||
-            atom_has(a_net_wm_window_type_popup_menu, atoms, nitems) ||
-            atom_has(a_net_wm_window_type_combo, atoms, nitems) ||
-            atom_has(a_net_wm_window_type_dnd, atoms, nitems) ||
-            atom_has(a_net_wm_window_type_dock, atoms, nitems) ||
-            atom_has(a_net_wm_window_type_desktop, atoms, nitems) ||
-            atom_has(a_net_wm_window_type_tooltip, atoms, nitems);
-
+            atom_has(a_net_wm_window_type_popup_menu,    atoms, nitems) ||
+            atom_has(a_net_wm_window_type_combo,         atoms, nitems) ||
+            atom_has(a_net_wm_window_type_dnd,           atoms, nitems) ||
+            atom_has(a_net_wm_window_type_dock,          atoms, nitems) ||
+            atom_has(a_net_wm_window_type_desktop,       atoms, nitems) ||
+            atom_has(a_net_wm_window_type_tooltip,       atoms, nitems);
         XFree(atoms);
         return floating;
     }
-
     return 0;
 }
 
@@ -248,79 +257,58 @@ int tray_find(Window w) {
 
 void tray_arrange() {
     if (!traywin) return;
-
     int x = 4;
     int h = BAR_HEIGHT - 6;
-
     for (int i = 0; i < tray_count; i++) {
         XWindowAttributes wa;
-        if (!XGetWindowAttributes(dis, tray_clients[i], &wa))
-            continue;
-
+        if (!XGetWindowAttributes(dis, tray_clients[i], &wa)) continue;
         int w = wa.width;
         if (w < h) w = h;
-        if (wa.height < h) {
-            XResizeWindow(dis, tray_clients[i], w, h);
-        }
-
+        if (wa.height < h) XResizeWindow(dis, tray_clients[i], w, h);
         XMoveResizeWindow(dis, tray_clients[i], x, 1, w, h);
         x += w + 6;
     }
-
     tray_w = (tray_count > 0) ? (x + 4) : 1;
-
     int tx = tray_x;
     if (tx < 120) tx = 120;
-
     XMoveResizeWindow(dis, traywin, tx, 3, tray_w, h);
 }
 
 void tray_claim() {
     XSetSelectionOwner(dis, a_net_system_tray_s0, traywin, CurrentTime);
-    if (XGetSelectionOwner(dis, a_net_system_tray_s0) != traywin)
-        return;
+    if (XGetSelectionOwner(dis, a_net_system_tray_s0) != traywin) return;
 
     XClientMessageEvent ev = {0};
-    ev.type = ClientMessage;
-    ev.window = root;
+    ev.type         = ClientMessage;
+    ev.window       = root;
     ev.message_type = a_manager;
-    ev.format = 32;
-    ev.data.l[0] = CurrentTime;
-    ev.data.l[1] = a_net_system_tray_s0;
-    ev.data.l[2] = traywin;
-    ev.data.l[3] = 0;
-    ev.data.l[4] = 0;
-
+    ev.format       = 32;
+    ev.data.l[0]    = CurrentTime;
+    ev.data.l[1]    = a_net_system_tray_s0;
+    ev.data.l[2]    = traywin;
     XSendEvent(dis, root, False, StructureNotifyMask, (XEvent *)&ev);
     XSync(dis, False);
 }
 
 void tray_dock(Window client) {
-    if (tray_find(client) >= 0) return;
-    if (tray_count >= TRAY_MAX) return;
-
+    if (tray_find(client) >= 0 || tray_count >= TRAY_MAX) return;
     tray_clients[tray_count++] = client;
-
     XAddToSaveSet(dis, client);
     XSelectInput(dis, client, StructureNotifyMask | PropertyChangeMask);
 
     unsigned long xembed_info[2] = { XEMBED_VERSION, 1 };
     XChangeProperty(dis, client, a_xembed_info, XA_CARDINAL, 32, PropModeReplace,
         (unsigned char *)xembed_info, 2);
-
     XReparentWindow(dis, client, traywin, 0, 0);
 
     XClientMessageEvent ev = {0};
-    ev.type = ClientMessage;
-    ev.window = client;
+    ev.type         = ClientMessage;
+    ev.window       = client;
     ev.message_type = a_xembed;
-    ev.format = 32;
-    ev.data.l[0] = CurrentTime;
-    ev.data.l[1] = XEMBED_EMBEDDED_NOTIFY;
-    ev.data.l[2] = 0;
-    ev.data.l[3] = traywin;
-    ev.data.l[4] = 0;
-
+    ev.format       = 32;
+    ev.data.l[0]    = CurrentTime;
+    ev.data.l[1]    = XEMBED_EMBEDDED_NOTIFY;
+    ev.data.l[3]    = traywin;
     XSendEvent(dis, client, False, NoEventMask, (XEvent *)&ev);
     XMapRaised(dis, client);
     tray_arrange();
@@ -330,13 +318,10 @@ void tray_dock(Window client) {
 void tray_remove(Window w) {
     int idx = tray_find(w);
     if (idx < 0) return;
-
     XRemoveFromSaveSet(dis, w);
-
     for (int i = idx; i < tray_count - 1; i++)
         tray_clients[i] = tray_clients[i + 1];
     tray_count--;
-
     tray_arrange();
 }
 
@@ -359,27 +344,23 @@ void draw_bar() {
     }
 
     Visual *visual = DefaultVisual(dis, 0);
-    Colormap cmap = DefaultColormap(dis, 0);
+    Colormap cmap  = DefaultColormap(dis, 0);
     XftDraw *d = XftDrawCreate(dis, barwin, visual, cmap);
     XSetForeground(dis, DefaultGC(dis, 0), COLOR_BG);
     XFillRectangle(dis, barwin, DefaultGC(dis, 0), 0, 0, sw, BAR_HEIGHT);
 
-    /* left: workspace indicators */
     int x = 12;
     for (int i = 0; i < MAX_WS; i++) {
         char label[4];
         snprintf(label, sizeof(label), "%d", i + 1);
         XftColor *col = (i == cur_ws || ws_count[i] > 0) ? &xft_white : &xft_gray;
-
         int w = txtw(label);
         ws_click_x[i] = x;
         ws_click_w[i] = w;
-
         XftDrawStringUtf8(d, col, font, x, 18, (FcChar8 *)label, strlen(label));
         x += w + 14;
     }
 
-    /* right: tray | battery | volume | time */
     char stat_msg[192] = "";
     char tmp[64];
     int first = 1;
@@ -400,21 +381,16 @@ void draw_bar() {
     }
 
     XGlyphInfo ext;
-    XftTextExtentsUtf8(dis, font, (FcChar8*)stat_msg, strlen(stat_msg), &ext);
-
+    XftTextExtentsUtf8(dis, font, (FcChar8 *)stat_msg, strlen(stat_msg), &ext);
     tray_x = sw - ext.xOff - tray_w - 28;
     if (tray_x < 120) tray_x = 120;
 
-    if (tray_count > 0) {
-        XftDrawStringUtf8(d, &xft_gray, font,
-                          tray_x + tray_w + 8, 18,
-                          (FcChar8 *)" | ", 1);
-    }
+    if (tray_count > 0)
+        XftDrawStringUtf8(d, &xft_gray, font, tray_x + tray_w + 8, 18, (FcChar8 *)" | ", 1);
 
     XftDrawStringUtf8(d, &xft_white, font, sw - ext.xOff - 12, 18,
-                      (FcChar8*)stat_msg, strlen(stat_msg));
+                      (FcChar8 *)stat_msg, strlen(stat_msg));
     XftDrawDestroy(d);
-
     tray_arrange();
 }
 
@@ -515,9 +491,8 @@ void focus_window(Window w) {
 
 void remove_window(Window w) {
     int found = 0;
-    for (int ws = 0; ws < MAX_WS; ws++) {
+    for (int ws = 0; ws < MAX_WS; ws++)
         if (ws_find(ws, w) >= 0) { ws_remove(ws, w); found = 1; }
-    }
     if (found) arrange();
 }
 
@@ -627,7 +602,7 @@ void view(int ws) {
     arrange();
 }
 
-/* ── bar click handling ───────────────────────────────────── */
+/* ── bar click ─────────────────────────────────────────────── */
 
 void handle_bar_click(XButtonEvent *e) {
     for (int i = 0; i < MAX_WS; i++) {
@@ -642,10 +617,7 @@ void handle_bar_click(XButtonEvent *e) {
                     ws_remove(cur_ws, sel);
                     ws_add(i, sel);
                     int ni = ws_find(i, sel);
-                    if (ni >= 0) {
-                        ws_float[i][ni] = fi;
-                        ws_full[i][ni]  = fu;
-                    }
+                    if (ni >= 0) { ws_float[i][ni] = fi; ws_full[i][ni] = fu; }
                 }
                 arrange();
             }
@@ -744,8 +716,8 @@ void resizemouse(Window w) {
                 if ((ev.xmotion.time - lasttime) <= (1000 / 60)) continue;
                 lasttime = ev.xmotion.time;
                 mfact = (float)ev.xmotion.x / sw;
-                if (mfact < 0.1) mfact = 0.1;
-                if (mfact > 0.9) mfact = 0.9;
+                if (mfact < 0.1f) mfact = 0.1f;
+                if (mfact > 0.9f) mfact = 0.9f;
                 arrange();
             }
         } while (ev.type != ButtonRelease);
@@ -753,67 +725,30 @@ void resizemouse(Window w) {
     }
 }
 
-/* ── input grabbing ──────────────────────────────────────────/
-also the default keybinds (+ others a bit more down): */
-/* ── keybinds ──────────────────────────────────────────────────
-   ctrl+alt+t            alacritty
-   super+r               rofi
-   super+e               pcmanfm
-   super+shift+e         kill X session
-   super+t               toggle float
-   super+f               toggle fullscreen
-   alt+f4                close focused window
-   alt+tab               cycle focus
-   super+left/right      focus prev/next window
-   super+up/down         focus prev/next window
-   super+shift+arrows    move window in layout order
-   super+lmb             drag tiled to reorder / drag float freely
-   super+rmb             resize float / adjust mfact (tiled)
-   super+1..9            switch workspace
-   super+shift+1..9      move window to workspace
-   XF86 vol up/down      volume +5/-5 (wpctl)
-   XF86 mute             toggle mute (wpctl)
-   XF86 bright up/down   brightness +5/-5 (brightnessctl)
-   Print                 take a screenshot (xclip + maim)
-   ─────────────────────────────────────────────────────────── */
+/* ── input grabbing ────────────────────────────────────────── */
 
 void grab_input() {
     XUngrabKey(dis, AnyKey, AnyModifier, root);
     unsigned int mods[] = { 0, LockMask, Mod2Mask, LockMask | Mod2Mask };
-    for (int i = 0; i < 4; i++) {
-        XGrabKey(dis, XKeysymToKeycode(dis, XK_t),     ControlMask | Mod1Mask | mods[i], root, True, GrabModeAsync, GrabModeAsync);
-        XGrabKey(dis, XKeysymToKeycode(dis, XK_t),     Mod4Mask | mods[i],               root, True, GrabModeAsync, GrabModeAsync);
-        XGrabKey(dis, XKeysymToKeycode(dis, XK_r),     Mod4Mask | mods[i],               root, True, GrabModeAsync, GrabModeAsync);
-        XGrabKey(dis, XKeysymToKeycode(dis, XK_e),     Mod4Mask | mods[i],               root, True, GrabModeAsync, GrabModeAsync);
-        XGrabKey(dis, XKeysymToKeycode(dis, XK_e),     Mod4Mask | ShiftMask | mods[i],   root, True, GrabModeAsync, GrabModeAsync);
-        XGrabKey(dis, XKeysymToKeycode(dis, XK_f),     Mod4Mask | mods[i],               root, True, GrabModeAsync, GrabModeAsync);
-        XGrabKey(dis, XKeysymToKeycode(dis, XK_F4),    Mod1Mask | mods[i],               root, True, GrabModeAsync, GrabModeAsync);
-        XGrabKey(dis, XKeysymToKeycode(dis, XK_Tab),   Mod1Mask | mods[i],               root, True, GrabModeAsync, GrabModeAsync);
-        XGrabKey(dis, XKeysymToKeycode(dis, XK_Left),  Mod4Mask | mods[i],               root, True, GrabModeAsync, GrabModeAsync);
-        XGrabKey(dis, XKeysymToKeycode(dis, XK_Right), Mod4Mask | mods[i],               root, True, GrabModeAsync, GrabModeAsync);
-        XGrabKey(dis, XKeysymToKeycode(dis, XK_Up),    Mod4Mask | mods[i],               root, True, GrabModeAsync, GrabModeAsync);
-        XGrabKey(dis, XKeysymToKeycode(dis, XK_Down),  Mod4Mask | mods[i],               root, True, GrabModeAsync, GrabModeAsync);
-        XGrabKey(dis, XKeysymToKeycode(dis, XK_Left),  Mod4Mask | ShiftMask | mods[i],   root, True, GrabModeAsync, GrabModeAsync);
-        XGrabKey(dis, XKeysymToKeycode(dis, XK_Right), Mod4Mask | ShiftMask | mods[i],   root, True, GrabModeAsync, GrabModeAsync);
-        XGrabKey(dis, XKeysymToKeycode(dis, XK_Up),    Mod4Mask | ShiftMask | mods[i],   root, True, GrabModeAsync, GrabModeAsync);
-        XGrabKey(dis, XKeysymToKeycode(dis, XK_Down),  Mod4Mask | ShiftMask | mods[i],   root, True, GrabModeAsync, GrabModeAsync);
-        XGrabKey(dis, XKeysymToKeycode(dis, XF86XK_AudioRaiseVolume),  0 | mods[i], root, True, GrabModeAsync, GrabModeAsync);
-        XGrabKey(dis, XKeysymToKeycode(dis, XF86XK_AudioLowerVolume),  0 | mods[i], root, True, GrabModeAsync, GrabModeAsync);
-        XGrabKey(dis, XKeysymToKeycode(dis, XF86XK_AudioMute),         0 | mods[i], root, True, GrabModeAsync, GrabModeAsync);
-        XGrabKey(dis, XKeysymToKeycode(dis, XF86XK_MonBrightnessUp),   0 | mods[i], root, True, GrabModeAsync, GrabModeAsync);
-        XGrabKey(dis, XKeysymToKeycode(dis, XF86XK_MonBrightnessDown), 0 | mods[i], root, True, GrabModeAsync, GrabModeAsync);
-        XGrabKey(dis, XKeysymToKeycode(dis, XK_Print), 0 | mods[i], root, True, GrabModeAsync, GrabModeAsync);
-        for (int n = 0; n < 9; n++) {
-            XGrabKey(dis, XKeysymToKeycode(dis, XK_1 + n), Mod4Mask | mods[i],             root, True, GrabModeAsync, GrabModeAsync);
-            XGrabKey(dis, XKeysymToKeycode(dis, XK_1 + n), Mod4Mask | ShiftMask | mods[i], root, True, GrabModeAsync, GrabModeAsync);
+    int nkeys = sizeof keys / sizeof keys[0];
+    for (int m = 0; m < 4; m++) {
+        for (int i = 0; i < nkeys; i++)
+            XGrabKey(dis, XKeysymToKeycode(dis, keys[i].key), keys[i].mod | mods[m],
+                     root, True, GrabModeAsync, GrabModeAsync);
+        for (int n = 0; n < MAX_WS; n++) {
+            XGrabKey(dis, XKeysymToKeycode(dis, XK_1 + n), MOD | mods[m],
+                     root, True, GrabModeAsync, GrabModeAsync);
+            XGrabKey(dis, XKeysymToKeycode(dis, XK_1 + n), MOD | SHIFT | mods[m],
+                     root, True, GrabModeAsync, GrabModeAsync);
         }
-        XGrabButton(dis, Button1, Mod4Mask | mods[i], root, True, ButtonPressMask, GrabModeAsync, GrabModeAsync, None, None);
-        XGrabButton(dis, Button3, Mod4Mask | mods[i], root, True, ButtonPressMask, GrabModeAsync, GrabModeAsync, None, None);
+        XGrabButton(dis, Button1, MOD | mods[m], root, True, ButtonPressMask,
+                    GrabModeAsync, GrabModeAsync, None, None);
+        XGrabButton(dis, Button3, MOD | mods[m], root, True, ButtonPressMask,
+                    GrabModeAsync, GrabModeAsync, None, None);
     }
 }
 
 /* ── main ──────────────────────────────────────────────────── */
-
 
 int main() {
     if (!(dis = XOpenDisplay(NULL))) return 1;
@@ -824,28 +759,27 @@ int main() {
     sh = DisplayHeight(dis, 0);
     for (int i = 0; i < MAX_WS; i++) { ws_count[i] = 0; ws_sel[i] = -1; }
 
-    a_net_wm_window_type           = XInternAtom(dis, "_NET_WM_WINDOW_TYPE", False);
-    a_net_wm_window_type_dialog    = XInternAtom(dis, "_NET_WM_WINDOW_TYPE_DIALOG", False);
-    a_net_wm_window_type_utility   = XInternAtom(dis, "_NET_WM_WINDOW_TYPE_UTILITY", False);
-    a_net_wm_window_type_splash    = XInternAtom(dis, "_NET_WM_WINDOW_TYPE_SPLASH", False);
-    a_net_wm_window_type_menu      = XInternAtom(dis, "_NET_WM_WINDOW_TYPE_MENU", False);
-    a_net_wm_window_type_toolbar   = XInternAtom(dis, "_NET_WM_WINDOW_TYPE_TOOLBAR", False);
-    a_net_wm_window_type_notification = XInternAtom(dis, "_NET_WM_WINDOW_TYPE_NOTIFICATION", False);
+    a_net_wm_window_type               = XInternAtom(dis, "_NET_WM_WINDOW_TYPE", False);
+    a_net_wm_window_type_dialog        = XInternAtom(dis, "_NET_WM_WINDOW_TYPE_DIALOG", False);
+    a_net_wm_window_type_utility       = XInternAtom(dis, "_NET_WM_WINDOW_TYPE_UTILITY", False);
+    a_net_wm_window_type_splash        = XInternAtom(dis, "_NET_WM_WINDOW_TYPE_SPLASH", False);
+    a_net_wm_window_type_menu          = XInternAtom(dis, "_NET_WM_WINDOW_TYPE_MENU", False);
+    a_net_wm_window_type_toolbar       = XInternAtom(dis, "_NET_WM_WINDOW_TYPE_TOOLBAR", False);
+    a_net_wm_window_type_notification  = XInternAtom(dis, "_NET_WM_WINDOW_TYPE_NOTIFICATION", False);
     a_net_wm_window_type_dropdown_menu = XInternAtom(dis, "_NET_WM_WINDOW_TYPE_DROPDOWN_MENU", False);
     a_net_wm_window_type_popup_menu    = XInternAtom(dis, "_NET_WM_WINDOW_TYPE_POPUP_MENU", False);
-    a_net_wm_window_type_combo     = XInternAtom(dis, "_NET_WM_WINDOW_TYPE_COMBO", False);
-    a_net_wm_window_type_dnd       = XInternAtom(dis, "_NET_WM_WINDOW_TYPE_DND", False);
-    a_net_wm_window_type_dock      = XInternAtom(dis, "_NET_WM_WINDOW_TYPE_DOCK", False);
-    a_net_wm_window_type_desktop   = XInternAtom(dis, "_NET_WM_WINDOW_TYPE_DESKTOP", False);
-    a_net_wm_window_type_tooltip   = XInternAtom(dis, "_NET_WM_WINDOW_TYPE_TOOLTIP", False);
-    a_net_wm_state                 = XInternAtom(dis, "_NET_WM_STATE", False);
-    a_net_wm_state_modal           = XInternAtom(dis, "_NET_WM_STATE_MODAL", False);
-
-    a_net_system_tray_s0 = XInternAtom(dis, "_NET_SYSTEM_TRAY_S0", False);
-    a_net_system_tray_opcode = XInternAtom(dis, "_NET_SYSTEM_TRAY_OPCODE", False);
-    a_xembed = XInternAtom(dis, "_XEMBED", False);
-    a_xembed_info = XInternAtom(dis, "_XEMBED_INFO", False);
-    a_manager = XInternAtom(dis, "MANAGER", False);
+    a_net_wm_window_type_combo         = XInternAtom(dis, "_NET_WM_WINDOW_TYPE_COMBO", False);
+    a_net_wm_window_type_dnd           = XInternAtom(dis, "_NET_WM_WINDOW_TYPE_DND", False);
+    a_net_wm_window_type_dock          = XInternAtom(dis, "_NET_WM_WINDOW_TYPE_DOCK", False);
+    a_net_wm_window_type_desktop       = XInternAtom(dis, "_NET_WM_WINDOW_TYPE_DESKTOP", False);
+    a_net_wm_window_type_tooltip       = XInternAtom(dis, "_NET_WM_WINDOW_TYPE_TOOLTIP", False);
+    a_net_wm_state                     = XInternAtom(dis, "_NET_WM_STATE", False);
+    a_net_wm_state_modal               = XInternAtom(dis, "_NET_WM_STATE_MODAL", False);
+    a_net_system_tray_s0               = XInternAtom(dis, "_NET_SYSTEM_TRAY_S0", False);
+    a_net_system_tray_opcode           = XInternAtom(dis, "_NET_SYSTEM_TRAY_OPCODE", False);
+    a_xembed                           = XInternAtom(dis, "_XEMBED", False);
+    a_xembed_info                      = XInternAtom(dis, "_XEMBED_INFO", False);
+    a_manager                          = XInternAtom(dis, "MANAGER", False);
 
     Atom net_wm_name = XInternAtom(dis, "_NET_WM_NAME", False);
     Atom utf8_string = XInternAtom(dis, "UTF8_STRING", False);
@@ -853,10 +787,10 @@ int main() {
         PropModeReplace, (unsigned char *)"beamwm", 6);
 
     Visual *visual = DefaultVisual(dis, 0);
-    Colormap cmap = DefaultColormap(dis, 0);
-    font = XftFontOpenName(dis, 0, "Iosevka Nerd Font:size=11");
-    XftColorAllocName(dis, visual, cmap, "#ffffff", &xft_white);
-    XftColorAllocName(dis, visual, cmap, "#3b4261", &xft_gray);
+    Colormap cmap  = DefaultColormap(dis, 0);
+    font = XftFontOpenName(dis, 0, FONT);
+    XftColorAllocName(dis, visual, cmap, COLOR_BAR_FG,  &xft_white);
+    XftColorAllocName(dis, visual, cmap, COLOR_BAR_DIM, &xft_gray);
 
     XSetWindowAttributes wa = { .override_redirect = True, .background_pixel = COLOR_BG };
     barwin = XCreateWindow(dis, root, 0, 0, sw, BAR_HEIGHT, 0,
@@ -871,13 +805,17 @@ int main() {
 
     XDefineCursor(dis, root, XCreateFontCursor(dis, XC_left_ptr));
     grab_input();
-    XSelectInput(dis, root, SubstructureRedirectMask | SubstructureNotifyMask | StructureNotifyMask | ButtonPressMask);
+    XSelectInput(dis, root, SubstructureRedirectMask | SubstructureNotifyMask |
+                             StructureNotifyMask | ButtonPressMask);
 
     cached_vol = get_volume();  last_vol  = time(NULL);
     cached_bat = get_battery(); last_bat  = time(NULL);
-    struct tm *t0 = localtime(&(time_t){time(NULL)});
-    strftime(cached_time, sizeof(cached_time), "%H:%M | %d %b %Y", t0);
-    last_time = time(NULL);
+    {
+        time_t now = time(NULL);
+        struct tm *t0 = localtime(&now);
+        strftime(cached_time, sizeof(cached_time), "󰥔 %H:%M | 󰃭 %d %b %Y", t0);
+        last_time = now;
+    }
 
     int x11_fd = ConnectionNumber(dis);
     XEvent ev;
@@ -891,22 +829,18 @@ int main() {
         while (XPending(dis)) {
             XNextEvent(dis, &ev);
 
-            if (ev.type == ConfigureNotify) {
-                if (ev.xconfigure.window == root) {
-                    sw = ev.xconfigure.width;
-                    sh = ev.xconfigure.height;
-                    XMoveResizeWindow(dis, barwin, 0, 0, sw, BAR_HEIGHT);
-                    arrange();
-                }
+            if (ev.type == ConfigureNotify && ev.xconfigure.window == root) {
+                sw = ev.xconfigure.width;
+                sh = ev.xconfigure.height;
+                XMoveResizeWindow(dis, barwin, 0, 0, sw, BAR_HEIGHT);
+                arrange();
             }
 
-            if (ev.type == ClientMessage) {
-                if ((Atom)ev.xclient.message_type == a_net_system_tray_opcode &&
-                    ev.xclient.data.l[1] == SYSTEM_TRAY_REQUEST_DOCK) {
-                    Window client = (Window)ev.xclient.data.l[2];
-                    tray_dock(client);
-                    arrange();
-                }
+            if (ev.type == ClientMessage &&
+                (Atom)ev.xclient.message_type == a_net_system_tray_opcode &&
+                ev.xclient.data.l[1] == SYSTEM_TRAY_REQUEST_DOCK) {
+                tray_dock((Window)ev.xclient.data.l[2]);
+                arrange();
             }
 
             if (ev.type == ButtonPress && ev.xbutton.window == barwin) {
@@ -916,45 +850,11 @@ int main() {
 
             if (ev.type == KeyPress) {
                 KeySym ks = XLookupKeysym(&ev.xkey, 0);
-                int super = ev.xkey.state & Mod4Mask;
-                int shift = ev.xkey.state & ShiftMask;
-                int ctrl  = ev.xkey.state & ControlMask;
-                int alt   = ev.xkey.state & Mod1Mask;
+                unsigned int clean = ev.xkey.state & ~(LockMask | Mod2Mask);
 
-                if (ks == XK_t && ctrl && alt)
-                    { char *c[] = {"st", NULL}; spawn(c); }
-                if (ks == XK_r && super)
-                    { char *c[] = {"rofi", "-show", "drun", NULL}; spawn(c); }
-                if (ks == XK_e && super && !shift)
-                    { char *c[] = {"pcmanfm", NULL}; spawn(c); }
-                if (ks == XK_e && super && shift)
-                    { char *c[] = {"pkill", "X", NULL}; spawn(c); }
-
-                if (ks == XK_Print)
-                    { char *c[] = {"sh", "-c", "maim -s | xclip -selection clipboard -t image/png", NULL}; spawn(c); }
-
-                if (ks == XK_t && super && !ctrl)   toggle_float();
-                if (ks == XK_f && super)             toggle_fullscreen();
-                if (ks == XK_F4 && alt)
-                    { Window sel = cur_sel(); if (sel) XKillClient(dis, sel); }
-                if (ks == XK_Tab && alt)             cycle_focus();
-                if ((ks == XK_Left  || ks == XK_Up)   && super && !shift) focus_step(-1);
-                if ((ks == XK_Right || ks == XK_Down) && super && !shift) focus_step(+1);
-                if ((ks == XK_Left  || ks == XK_Up)   && super && shift)  move_step(-1);
-                if ((ks == XK_Right || ks == XK_Down) && super && shift)  move_step(+1);
-                if (ks == XF86XK_AudioRaiseVolume)
-                    { char *c[] = {"wpctl", "set-volume", "@DEFAULT_SINK@", "5%+", NULL}; spawn(c); last_vol = 0; }
-                if (ks == XF86XK_AudioLowerVolume)
-                    { char *c[] = {"wpctl", "set-volume", "@DEFAULT_SINK@", "5%-", NULL}; spawn(c); last_vol = 0; }
-                if (ks == XF86XK_AudioMute)
-                    { char *c[] = {"wpctl", "set-mute", "@DEFAULT_SINK@", "toggle", NULL}; spawn(c); last_vol = 0; }
-                if (ks == XF86XK_MonBrightnessUp)
-                    { char *c[] = {"brightnessctl", "set", "5%+", NULL}; spawn(c); }
-                if (ks == XF86XK_MonBrightnessDown)
-                    { char *c[] = {"brightnessctl", "set", "5%-", NULL}; spawn(c); }
-                if (ks >= XK_1 && ks <= XK_9 && super) {
+                if ((clean & MOD) && ks >= XK_1 && ks <= XK_9) {
                     int t = ks - XK_1;
-                    if (shift) {
+                    if (clean & SHIFT) {
                         Window sel = cur_sel();
                         if (sel) {
                             int fi = ws_float[cur_ws][ws_sel[cur_ws]];
@@ -962,24 +862,37 @@ int main() {
                             ws_remove(cur_ws, sel);
                             ws_add(t, sel);
                             int ni = ws_find(t, sel);
-                            if (ni >= 0) {
-                                ws_float[t][ni] = fi;
-                                ws_full[t][ni]  = fu;
-                            }
+                            if (ni >= 0) { ws_float[t][ni] = fi; ws_full[t][ni] = fu; }
                             arrange();
                         }
                     } else view(t);
+                } else {
+                    int nkeys = sizeof keys / sizeof keys[0];
+                    for (int i = 0; i < nkeys; i++) {
+                        if (ks != keys[i].key || clean != keys[i].mod) continue;
+                        switch (keys[i].action) {
+                        case ACT_SPAWN:        spawn(keys[i].cmd); break;
+                        case ACT_VOL_SPAWN:    spawn(keys[i].cmd); last_vol = 0; break;
+                        case ACT_TOGGLE_FLOAT: toggle_float(); break;
+                        case ACT_TOGGLE_FULL:  toggle_fullscreen(); break;
+                        case ACT_KILL:         { Window s = cur_sel(); if (s) XKillClient(dis, s); } break;
+                        case ACT_CYCLE_FOCUS:  cycle_focus(); break;
+                        case ACT_FOCUS_PREV:   focus_step(-1); break;
+                        case ACT_FOCUS_NEXT:   focus_step(+1); break;
+                        case ACT_MOVE_PREV:    move_step(-1); break;
+                        case ACT_MOVE_NEXT:    move_step(+1); break;
+                        }
+                        break;
+                    }
                 }
             }
 
-            if (ev.type == ButtonPress && (ev.xbutton.state & Mod4Mask)) {
+            if (ev.type == ButtonPress && (ev.xbutton.state & MOD)) {
                 Window clicked = ev.xbutton.subwindow ? ev.xbutton.subwindow : ev.xbutton.window;
                 if (clicked && clicked != root && clicked != barwin && clicked != traywin) {
                     focus_window(clicked);
-                    if (ev.xbutton.button == Button1)
-                        movemouse(clicked);
-                    else if (ev.xbutton.button == Button3)
-                        resizemouse(clicked);
+                    if (ev.xbutton.button == Button1)      movemouse(clicked);
+                    else if (ev.xbutton.button == Button3) resizemouse(clicked);
                 }
             }
 
@@ -988,8 +901,7 @@ int main() {
                 XSelectInput(dis, w, EnterWindowMask | FocusChangeMask | PropertyChangeMask);
                 ws_add(cur_ws, w);
                 int idx = ws_find(cur_ws, w);
-                if (idx >= 0 && should_float(w))
-                    ws_float[cur_ws][idx] = 1;
+                if (idx >= 0 && should_float(w)) ws_float[cur_ws][idx] = 1;
                 XMapWindow(dis, w);
                 arrange();
             }
