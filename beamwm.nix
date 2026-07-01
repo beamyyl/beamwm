@@ -3,7 +3,7 @@
 stdenv.mkDerivation rec {
   pname = "beamwm";
   version = "0.1.0";
-  src = /home/beamy/beamwm;
+  src = ./. + "";
   nativeBuildInputs = [ pkg-config gnumake ];
   buildInputs = [ 
     libX11 
